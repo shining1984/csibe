@@ -17,5 +17,9 @@ endif()
 add_custom_target (${PROJECT_NAME}_size DEPENDS ${SIZE_RESULT})
 add_custom_command (OUTPUT ${SIZE_RESULT}
   COMMAND ${SUM_SIZES} ${PROJECT_BINARY_DIR} ${SIZE_RESULT}
-  DEPENDS ${PROJECT_NAME})
+  DEPENDS ${PROJECT_NAME}
+          ${DUMP_OBJ_SIZE}
+          ${SUM_SIZES}
+  VERBATIM
+)
 

@@ -1,6 +1,59 @@
 #!/bin/bash
 
+# RESULT_DIR=$1
+# DEST=$2
+
+# cat $1/*_result.txt > $DEST
+
+
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 RESULT_DIR DEST" >&2
+    exit 2
+fi
+
 RESULT_DIR=$1
 DEST=$2
 
-cat $1/*_result.txt > $DEST
+shopt -s nullglob
+FRAGMENTS=("${RESULT_DIR}"/*_result.txt)
+
+if [ "${#FRAGMENTS[@]}" -eq 0 ]; then
+    echo "No size fragments found in: $RESULT_DIR" >&2
+    exit 1
+fi
+
+mkdir -p "$(dirname "$DEST")"
+TEMP_FILE=$(mktemp "${DEST}.tmp.XXXXXX")
+
+trap 'rm -f "$TEMP_FILE"' EXIT
+
+{
+    printf '%s\n' \
+        'object,text,data,bss,rom_size,object_file_size'
+
+    LC_ALL=C sort "${FRAGMENTS[@]}" |
+        awk -F, '
+            function numeric(value) {
+                return value ~ /^[0-9]+$/
+            }
+
+            NF != 6 ||
+            !numeric($2) ||
+            !numeric($3) ||
+            !numeric($4) ||
+            !numeric($5) ||
+            !numeric($6) {
+                print "Invalid size fragment: " $0 > "/dev/stderr"
+                exit 1
+            }
+
+            {
+                print
+            }
+        '
+} > "$TEMP_FILE"
+
+mv -f "$TEMP_FILE" "$DEST"
+trap - EXIT

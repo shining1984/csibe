@@ -1,25 +1,80 @@
 #!/bin/bash
 
-OUT=$1
+# OUT=$1
+# COMPILER=$2
+# FLAGS=$3
+
+# FILES=`find . -name 'result.csv'`
+
+# rm -f $OUT
+
+# COMPILER_VERSION=$($COMPILER --version | sed -n '1p')
+# echo "Compiler version,$COMPILER_VERSION" >> $OUT
+
+# echo "Compiler flags,$FLAGS" >> $OUT
+# echo "" >> $OUT
+
+# echo "Date,`date +\"%F\"`" >> $OUT
+# echo "" >> $OUT
+
+# for F in $FILES
+# do
+# 	DIR=`dirname $F`
+# 	PROJECT=`basename $DIR`
+# 	cat $F | sed -e 's#\(.*\)#'$PROJECT',\1#' >> $OUT
+# done
+
+
+#!/bin/bash
+
+set -euo pipefail
+
+if [ "$#" -ne 3 ]; then
+    echo "Usage: $0 OUTPUT COMPILER FLAGS" >&2
+    exit 2
+fi
+
+OUTPUT=$1
 COMPILER=$2
 FLAGS=$3
 
-FILES=`find . -name 'result.csv'`
+COMPILER_VERSION=$("$COMPILER" --version | sed -n '1p')
 
-rm -f $OUT
+mkdir -p "$(dirname "$OUTPUT")"
+TEMP_FILE=$(mktemp "${OUTPUT}.tmp.XXXXXX")
 
-COMPILER_VERSION=$($COMPILER --version | sed -n '1p')
-echo "Compiler version,$COMPILER_VERSION" >> $OUT
+trap 'rm -f "$TEMP_FILE"' EXIT
 
-echo "Compiler flags,$FLAGS" >> $OUT
-echo "" >> $OUT
+{
+    printf 'Compiler version,%s\n' "$COMPILER_VERSION"
+    printf 'Compiler flags,%s\n' "$FLAGS"
+    printf '\n'
+    printf 'Date,%s\n' "$(date '+%F')"
+    printf '\n'
+    printf '%s\n' \
+        'benchmark,object,text,data,bss,rom_size,object_file_size'
 
-echo "Date,`date +\"%F\"`" >> $OUT
-echo "" >> $OUT
+    while IFS= read -r -d '' RESULT_FILE; do
+        PROJECT=$(basename "$(dirname "$RESULT_FILE")")
+        IFS= read -r HEADER < "$RESULT_FILE"
 
-for F in $FILES
-do
-	DIR=`dirname $F`
-	PROJECT=`basename $DIR`
-	cat $F | sed -e 's#\(.*\)#'$PROJECT',\1#' >> $OUT
-done
+        EXPECTED_HEADER='object,text,data,bss,rom_size,object_file_size'
+
+        if [ "$HEADER" != "$EXPECTED_HEADER" ]; then
+            echo "Unexpected CSV header in $RESULT_FILE: $HEADER" >&2
+            exit 1
+        fi
+
+        while IFS= read -r ROW; do
+            if [ -n "$ROW" ]; then
+                printf '%s,%s\n' "$PROJECT" "$ROW"
+            fi
+        done < <(tail -n +2 "$RESULT_FILE")
+    done < <(
+        find . -type f -name 'result.csv' -print0 |
+            LC_ALL=C sort -z
+    )
+} > "$TEMP_FILE"
+
+mv -f "$TEMP_FILE" "$OUTPUT"
+trap - EXIT
