@@ -1,7 +1,87 @@
 #!/bin/bash
 
-OBJ=$1
-BASE=`basename $OBJ`
-DEST_DIR=$2
+# OBJ=$1
+# BASE=`basename $OBJ`
+# DEST_DIR=$2
 
-size $OBJ | awk '{if($6 ~ /\.o$|\.obj$/) {sub(".*/", "", $6); print $6 "," $1;}}' > $DEST_DIR/${BASE}_result.txt
+# size $OBJ | awk '{if($6 ~ /\.o$|\.obj$/) {sub(".*/", "", $6); print $6 "," $1;}}' > $DEST_DIR/${BASE}_result.txt
+
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 OBJECT DEST_DIR" >&2
+    exit 2
+fi
+
+OBJECT=$1
+DEST_DIR=$2
+OBJECT_NAME=$(basename "$OBJECT")
+
+# CSiBE invokes this script concurrently.  A basename alone is not unique:
+# for example, Teem compiles both limn/light.c and limn/test/light.c.  Using
+# it as the fragment name lets the last compiler process overwrite another
+# object's measurement.  Strip the per-run build prefix, then hash the stable
+# object-relative path so keys remain reproducible across independent builds.
+OBJECT_RELATIVE=$OBJECT
+if [[ "$OBJECT" == */CMakeFiles/* ]]; then
+    OBJECT_RELATIVE=${OBJECT#*/CMakeFiles/}
+elif [[ "$OBJECT" == */preprocessed-objects/* ]]; then
+    OBJECT_RELATIVE=${OBJECT#*/preprocessed-objects/}
+fi
+OBJECT_DIGEST=$(printf '%s' "$OBJECT_RELATIVE" | sha256sum | cut -c1-16)
+OBJECT_ID="${OBJECT_NAME}__${OBJECT_DIGEST}"
+
+if [ ! -f "$OBJECT" ]; then
+    echo "Object file does not exist: $OBJECT" >&2
+    exit 1
+fi
+
+case "$OBJECT_NAME" in
+    *,*)
+        echo "Object name contains a comma: $OBJECT_NAME" >&2
+        exit 1
+        ;;
+esac
+
+mkdir -p "$DEST_DIR"
+
+SIZE_VALUES=$(
+    LC_ALL=C size --format=berkeley "$OBJECT" |
+        awk '
+            NR == 2 {
+                if ($1 !~ /^[0-9]+$/ ||
+                    $2 !~ /^[0-9]+$/ ||
+                    $3 !~ /^[0-9]+$/) {
+                    exit 1
+                }
+
+                print $1, $2, $3
+            }
+        '
+)
+
+if [ -z "$SIZE_VALUES" ]; then
+    echo "Could not read section sizes: $OBJECT" >&2
+    exit 1
+fi
+
+read -r TEXT_SIZE DATA_SIZE BSS_SIZE <<< "$SIZE_VALUES"
+
+ROM_SIZE=$((TEXT_SIZE + DATA_SIZE))
+OBJECT_FILE_SIZE=$(stat -c '%s' "$OBJECT")
+
+RESULT_FILE="${DEST_DIR}/${OBJECT_ID}_result.txt"
+TEMP_FILE=$(mktemp "${RESULT_FILE}.tmp.XXXXXX")
+
+trap 'rm -f "$TEMP_FILE"' EXIT
+
+printf '%s,%s,%s,%s,%s,%s\n' \
+    "$OBJECT_ID" \
+    "$TEXT_SIZE" \
+    "$DATA_SIZE" \
+    "$BSS_SIZE" \
+    "$ROM_SIZE" \
+    "$OBJECT_FILE_SIZE" > "$TEMP_FILE"
+
+mv -f "$TEMP_FILE" "$RESULT_FILE"
+trap - EXIT
